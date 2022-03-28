@@ -113,6 +113,16 @@ impl World {
         }
     }
 
+    fn remove_nook(&mut self, position: &Position) {
+        match self.map.get(position) {
+            Some(Thing::Nook(nook)) => {
+                self.map.remove(position);
+                // TODO: remove from linked list
+            }
+            _ => panic!("No nook at {}", position),
+        }
+    }
+
     fn get_view(&self, center: &Position) -> View {
         let mut view: View = [[0u8; 5]; 5];
         let yc = center.y;
@@ -284,10 +294,12 @@ fn test_get_view() {
 }
 
 #[test]
-fn test_add_nooks() {
+fn test_add_and_remove_nooks() {
     let mut world = blank_world(3, 3);
     let nook = Rc::new(Nook { weight: 1 });
     assert_eq!(world.nooks.len(), 0);
     world.add_nook(&Position { y: 0, x: 0 }, nook);
     assert_eq!(world.nooks.len(), 1);
+    world.remove_nook(&Position { y: 0, x: 0 });
+    assert_eq!(world.nooks.len(), 0);
 }
