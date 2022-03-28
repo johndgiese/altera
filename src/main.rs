@@ -6,6 +6,7 @@ use std::collections::HashMap;
 
 fn main() {
     // TODO: if file provided, load the world from it, else create world of specified size
+    // TODO: add random seed
     let mut world = single_nook_world(5, 5);
     let num_steps = 10;
     for i in 1..num_steps {
@@ -16,6 +17,7 @@ fn main() {
     // TODO: save the final file to the specified location
 }
 
+// TODO: use Trait Objects to allow Nooks with different implementations all to run at the same time
 #[derive(Debug, Clone, PartialEq)]
 struct Nook {
     weight: u8,
@@ -116,9 +118,29 @@ impl World {
             }
         })
     }
+    // data structure that
+    // - lets you see who is in a particular location (either HashMap or a big array of pointers)
+    // - lets you iterate through nooks in order (linked list)
+    // - add new nooks at locations (ix, iy) -> Nook
+    // - remove nooks during an iteration
+    // - move nooks to new locations while preserving the iteration order
 
     fn apply_actions(&self, actions: Vec<Action>) {
-        // TODO: implement this
+        // for each nook (in order of creation)
+        //  if rest, continue
+        //  if eat
+        //   see what's on the square
+        //   if it's food, increase weight
+        //   if it's a nook and it weights less, eat the nook
+        //  if move
+        //   see what's on the square
+        //   if there's something there, skip turn (TODO: implement pushing)
+        //   if there's nothing there, move the nook
+        //  if split
+        //   see what's on the square
+        //   if there's nothing there, create a new Nook with 1/2 the weight rounding down
+        // TODO: handle starvation
+        // TODO: add back weight that is removed from Nooks
     }
 
     fn print(&self) {
