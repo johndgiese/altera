@@ -1,9 +1,10 @@
 mod modulo;
 use modulo::Mod;
+mod linked_list;
+use linked_list::LinkedList;
 
 use std::cmp;
 use std::collections::HashMap;
-use std::collections::LinkedList;
 use std::fmt;
 use std::rc::Rc;
 
@@ -113,14 +114,25 @@ impl World {
         }
     }
 
+    /// Remove nook at specified location from the world, panicing if there
+    /// isn't a nook there.  Removes references in `self.map` and `self.nooks`.
     fn remove_nook(&mut self, position: &Position) {
-        match self.map.get(position) {
-            Some(Thing::Nook(nook)) => {
-                self.map.remove(position);
-                // TODO: remove from linked list
-            }
-            _ => panic!("No nook at {}", position),
+        match self.map.remove(position) {
+            Some(Thing::Nook(nook)) => self.remove_nook_from_list(nook),
+            Some(Thing::Food) => panic!("Expected nook at {}, found food", position),
+            None => panic!("Expected nook at {}, found nothing", position),
         }
+    }
+
+    fn remove_nook_from_list(&mut self, nook: Rc<Nook>) {
+        let mut cursor = self.nooks.cursor();
+        while match cursor.next() {
+            None => panic!("Nook from world.map not found in world.nooks"),
+            Some(other) if Rc::ptr_eq(&nook, other) => false,
+            _ => true,
+        } {}
+        cursor.prev().unwrap();
+        cursor.remove().unwrap();
     }
 
     fn get_view(&self, center: &Position) -> View {
