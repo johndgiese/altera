@@ -1,3 +1,45 @@
+//! Altera is a commandline tool for running a simulated two-dimensional grid
+//! [World] that wraps around on itself. Each square of the grid may be empty,
+//! have a piece of food, or a [Nook]. Nooks are little creatures that have a
+//! weight between 1 and 255. The world progresses forward in discreete time
+//! steps. Food is stationary and never moves. At each point in time nooks is
+//! provided a small [View] of the contents of the grid surrounding themselves
+//! and, based on this view, they choose an [Action]: move to an adjacent
+//! square, eat the contents of an adjacent spot, split in two (i.e., asexual
+//! reproduction), or sit still. Nooks may eat other nooks that don't weigh more
+//! than themselves. When they eat food, or a nook, they gain the weight of the
+//! object they ate. If ever a nook's weight goes above 255 the remaining weight
+//! is distributed randomly onto empty squares in the world. Thus, there is a
+//! law of "conservation of weight". Periodically, every nook in the world
+//! looses one weight. The weight that remains is, likewise, distributed across
+//! the world randomly. If a nook's weight drops to 0, they die. If all of the
+//! nook's die the world will reach a static state.
+//!
+//! Each nook will eventually have some internal decision-making system that,
+//! given a [View] selects an [Action]. This system may also pass state between
+//! calls to itself, opening the door for some sort of memory.
+//!
+//! When Nook's reproduce they split their weight in two (the "child"'s weight
+//! is rounded down if the parent's weight is an odd number). The child's
+//! decision-making system is also copied as is its state, but the copy that is
+//! made is not perfect; small mutations may be made.
+//!
+//! Alter has a couple of design goals:
+//!
+//! 1. It must be deterministic; the same [World] in the same state must unfold
+//! in the same way given the same version of the code.
+//!
+//! 2. It must be possible to calculate each nook's next action in parallel from
+//! the other Nooks. This is important since it will allow the most
+//! computationally intensive code to be run in parallel.
+//!
+//! To accomplish both of these goals, each nook calculates its next [Action]
+//! using a [View] taken from the state of the grid at the end of the previous
+//! time step. After all of the actions are selected, each action is applied in
+//! a particular order. Thus, the state of the world at the time when the action
+//! is applied may be different than the state when that nook made the decision.
+//! Clever nooks will need to take this oddity in their laws of physics into
+//! account when making their decisions.
 mod modulo;
 use modulo::Mod;
 mod linked_list;
@@ -7,6 +49,7 @@ use std::cmp;
 use std::collections::HashMap;
 use std::fmt;
 use std::rc::Rc;
+use std::vec::Vec;
 
 fn main() {
     // TODO: if file provided, load the world from it, else create world of specified size
@@ -25,6 +68,7 @@ fn main() {
 #[derive(Debug, Clone, PartialEq)]
 struct Nook {
     weight: u8,
+    // TODO: add the internal state of the Nook which is passed between time steps
 }
 
 type View = [[u8; 5]; 5];
@@ -54,7 +98,7 @@ enum Thing {
     Food,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Copy, Clone, PartialEq)]
 enum Direction {
     Up,
     Left,
@@ -62,7 +106,7 @@ enum Direction {
     Right,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Copy, Clone, PartialEq)]
 enum Action {
     Move(Direction),
     Eat(Direction),
@@ -70,34 +114,47 @@ enum Action {
     Rest,
 }
 
+/// A World stores the complete state of a particular simulation instance. It
+/// includes two data structures that have some redundant information:
+///
+/// 1. [Nook::map] keeps track of which squares have food or nooks on them
+///
+/// 2. [Nook::nooks] is a linked list that tracks the order in which the nooks
+/// were created; the order is important since the nook's actions must be
+/// applied in that order.
+///
+/// Both data structures share ownership of the nooks and both contain copies of
+/// the nook's current position. Thus, when a nook moves, a nook is added, or a
+/// nook is removed, both data structures need to be updated together.
 struct World {
-    nx: isize,
+    // TODO: add the random number generator's state
     ny: isize,
+    nx: isize,
     map: HashMap<Position, Thing>,
-    nooks: LinkedList<Rc<Nook>>,
+    nooks: LinkedList<(Position, Action, Rc<Nook>)>,
 }
 
 impl World {
     fn step(&mut self) {
-        let num_actions = self.num_nooks().try_into().unwrap();
-        let mut actions: Vec<Action> = Vec::with_capacity(num_actions);
-        for (position, thing) in self.map.iter() {
-            match thing {
-                Thing::Nook(nook) => {
-                    let view = self.get_view(position);
-                    let action = nook.act(view);
-                    actions.push(action);
-                }
-                _ => {}
-            }
+        // Collect all Nook's actions given the current state of the world;
+        // then process them. Nook actions are all calculated upfront in order
+        // to allow the process to be parallelizable.
+        let mut actions: Vec<Action> = Vec::with_capacity(self.nooks.len());
+        for (i, (position, _, nook)) in self.nooks.iter().enumerate() {
+            let view = self.get_view(&position);
+            actions[i] = nook.act(view);
         }
-        self.apply_actions(actions);
+        for (i, node) in self.nooks.iter_mut().enumerate() {
+            node.1 = actions[i];
+        }
+        self.apply_actions();
     }
 
     fn add_nook(&mut self, position: &Position, nook: Rc<Nook>) {
         match self.map.get(position) {
             None => {
-                self.nooks.push_back(Rc::clone(&nook));
+                self.nooks
+                    .push_back((position.clone(), Action::Rest, Rc::clone(&nook)));
                 self.map
                     .insert(position.clone(), Thing::Nook(Rc::clone(&nook)));
             }
@@ -128,11 +185,10 @@ impl World {
         let mut cursor = self.nooks.cursor();
         while match cursor.next() {
             None => panic!("Nook from world.map not found in world.nooks"),
-            Some(other) if Rc::ptr_eq(&nook, other) => false,
+            Some((_, _, other)) if Rc::ptr_eq(&nook, other) => false,
             _ => true,
         } {}
-        cursor.prev().unwrap();
-        cursor.remove().unwrap();
+        cursor.remove_prev().unwrap();
     }
 
     fn get_view(&self, center: &Position) -> View {
@@ -175,27 +231,61 @@ impl World {
             }
         })
     }
-    // data structure that
-    // - lets you see who is in a particular location (either HashMap or a big array of pointers)
-    // - lets you iterate through nooks in order (linked list)
-    // - add new nooks at locations (ix, iy) -> Nook
-    // - remove nooks during an iteration
-    // - move nooks to new locations while preserving the iteration order
 
-    fn apply_actions(&self, actions: Vec<Action>) {
-        // for each nook (in order of creation)
-        //  if rest, continue
-        //  if eat
-        //   see what's on the square
-        //   if it's food, increase weight
-        //   if it's a nook and it weights less, eat the nook
-        //  if move
-        //   see what's on the square
-        //   if there's something there, skip turn (TODO: implement pushing)
-        //   if there's nothing there, move the nook
-        //  if split
-        //   see what's on the square
-        //   if there's nothing there, create a new Nook with 1/2 the weight rounding down
+    fn move_to(&self, start: &Position, direction: &Direction) -> Position {
+        match direction {
+            Direction::Down => Position {
+                y: (start.y - 1).modulo(self.ny),
+                x: start.x,
+            },
+            Direction::Up => Position {
+                y: (start.y + 1).modulo(self.ny),
+                x: start.x,
+            },
+            Direction::Left => Position {
+                y: start.y,
+                x: (start.x - 1).modulo(self.nx),
+            },
+            Direction::Right => Position {
+                y: start.y,
+                x: (start.x + 1).modulo(self.nx),
+            },
+        }
+    }
+
+    fn apply_actions(&mut self) {
+        let mut cursor = self.nooks.cursor();
+        while let Some((position, action, nook)) = cursor.next() {
+            match action {
+                Rest => (),
+                Action::Move(direction) => {
+                    let new_position = self.move_to(position, direction);
+                    match self.map.get(&new_position) {
+                        None => {
+                            self.map.remove(position);
+                            // move
+                        }
+                        Some(Thing::Food) => {}
+                        Some(Thing::Nook(other)) => {}
+                    }
+                    // TODO: handle
+                    //   see what's on the square
+                    //   if there's something there, skip turn (TODO: implement pushing)
+                    //   if there's nothing there, move the nook
+                }
+                Action::Split(direction) => {
+                    // TODO: handle
+                    //   see what's on the square
+                    //   if there's nothing there, create a new Nook with 1/2 the weight rounding down
+                }
+                Action::Eat(direction) => {
+                    // TODO: handle
+                    //   see what's on the square
+                    //   if it's food, increase weight
+                    //   if it's a nook and it weights less, eat the nook
+                }
+            }
+        }
         // TODO: handle starvation
         // TODO: add back weight that is removed from Nooks
     }
@@ -216,7 +306,7 @@ impl World {
     }
 }
 
-fn single_nook_world(nx: isize, ny: isize) -> World {
+fn single_nook_world(ny: isize, nx: isize) -> World {
     let mut world = blank_world(ny, nx);
     for y in 0..ny {
         for x in 0..nx {
@@ -262,7 +352,7 @@ fn test_single_nook_world() {
     assert_eq!(world.total_weight(), 25);
     assert_eq!(world.num_nooks(), 1);
     let nook = Rc::new(Nook { weight: 1 });
-    let position = Position { x: 2, y: 2 };
+    let position = Position { y: 2, x: 2 };
     assert_eq!(world.map.get(&position), Some(&Thing::Nook(nook)));
 }
 
@@ -314,4 +404,73 @@ fn test_add_and_remove_nooks() {
     assert_eq!(world.nooks.len(), 1);
     world.remove_nook(&Position { y: 0, x: 0 });
     assert_eq!(world.nooks.len(), 0);
+}
+
+#[test]
+fn test_move_to() {
+    let ny = 4;
+    let nx = 3;
+    let world = blank_world(ny, nx);
+    assert_eq!(
+        world.move_to(&Position { y: 0, x: 0 }, &Direction::Up),
+        Position { y: ny - 1, x: 0 }
+    );
+    assert_eq!(
+        world.move_to(&Position { y: 0, x: 0 }, &Direction::Down),
+        Position { y: 1, x: 0 }
+    );
+    assert_eq!(
+        world.move_to(&Position { y: 0, x: 0 }, &Direction::Left),
+        Position { y: 0, x: nx - 1 }
+    );
+    assert_eq!(
+        world.move_to(&Position { y: 0, x: 0 }, &Direction::Right),
+        Position { y: 0, x: 1 }
+    );
+    assert_eq!(
+        world.move_to(
+            &Position {
+                y: ny - 1,
+                x: nx - 1
+            },
+            &Direction::Up
+        ),
+        Position {
+            y: ny - 2,
+            x: nx - 1
+        }
+    );
+    assert_eq!(
+        world.move_to(
+            &Position {
+                y: ny - 1,
+                x: nx - 1
+            },
+            &Direction::Down
+        ),
+        Position { y: 0, x: nx - 1 }
+    );
+    assert_eq!(
+        world.move_to(
+            &Position {
+                y: ny - 1,
+                x: nx - 1
+            },
+            &Direction::Left
+        ),
+        Position {
+            y: ny - 1,
+            x: nx - 2
+        }
+    );
+    assert_eq!(
+        world.move_to(
+            &Position {
+                y: ny - 1,
+                x: nx - 1
+            },
+            &Direction::Right
+        ),
+        Position { y: ny - 1, x: 0 }
+    );
 }

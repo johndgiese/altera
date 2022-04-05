@@ -552,6 +552,15 @@ impl<'a, T> Cursor<'a, T> {
         }
     }
 
+    /// Removes the previous element in the list, without moving the cursor. Returns None if the list
+    /// is empty, or if `prev` is the ghost element
+    pub fn remove_prev(&mut self) -> Option<T> {
+        match self.prev() {
+            None => None,
+            Some(_) => self.remove(),
+        }
+    }
+
     /// Splits the list into two at the cursor's current position. This will return a new list
     /// consisting of everything after the cursor, with the original list retaining everything
     /// before. The cursor will then lie between the tail and the ghost.
@@ -1255,6 +1264,18 @@ mod tests {
             assert_eq!(*curs.prev().unwrap(), 5);
         }
         assert_eq!(list.len(), 2);
+    }
+
+    #[test]
+    fn test_cursor_remove_prev() {
+        let mut list = list_from(&[0, 1, 2, 3]);
+        {
+            let mut curs = list.cursor();
+            assert_eq!(curs.remove_prev(), None);
+            curs.next();
+            assert_eq!(curs.remove_prev().unwrap(), 0);
+        }
+        assert_eq!(list.len(), 3);
     }
 
     #[test]
