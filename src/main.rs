@@ -42,13 +42,10 @@
 //! account when making their decisions.
 mod modulo;
 use modulo::Mod;
-mod linked_list;
-use linked_list::LinkedList;
 
 use std::cmp;
 use std::collections::HashMap;
 use std::fmt;
-use std::rc::Rc;
 use std::vec::Vec;
 
 fn main() {
@@ -65,11 +62,13 @@ fn main() {
 }
 
 // TODO: use Trait Objects to allow Nooks with different implementations all to run at the same time
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Copy, Clone, PartialEq)]
 struct Nook {
     weight: u8,
     // TODO: add the internal state of the Nook which is passed between time steps
 }
+
+type Age = u128;
 
 type View = [[u8; 5]; 5];
 
@@ -94,7 +93,7 @@ impl Nook {
 
 #[derive(Debug, Clone, PartialEq)]
 enum Thing {
-    Nook(Rc<Nook>),
+    Nook(Nook, Age),
     Food,
 }
 
@@ -115,23 +114,16 @@ enum Action {
 }
 
 /// A World stores the complete state of a particular simulation instance. It
-/// includes two data structures that have some redundant information:
-///
-/// 1. [Nook::map] keeps track of which squares have food or nooks on them
-///
-/// 2. [Nook::nooks] is a linked list that tracks the order in which the nooks
-/// were created; the order is important since the nook's actions must be
-/// applied in that order.
-///
-/// Both data structures share ownership of the nooks and both contain copies of
-/// the nook's current position. Thus, when a nook moves, a nook is added, or a
-/// nook is removed, both data structures need to be updated together.
+/// includes [Nook::map] which track of which squares have food or nooks on
+/// them. It also stores the relative age of each nook that's been added to the
+/// world. The order that the nooks were added in is important since the nook's
+/// actions must be applied in that order.
 struct World {
     // TODO: add the random number generator's state
     ny: isize,
     nx: isize,
+    nook_counter: Age,
     map: HashMap<Position, Thing>,
-    nooks: LinkedList<(Position, Action, Rc<Nook>)>,
 }
 
 impl World {
@@ -139,24 +131,34 @@ impl World {
         // Collect all Nook's actions given the current state of the world;
         // then process them. Nook actions are all calculated upfront in order
         // to allow the process to be parallelizable.
-        let mut actions: Vec<Action> = Vec::with_capacity(self.nooks.len());
-        for (i, (position, _, nook)) in self.nooks.iter().enumerate() {
+        let mut actions: HashMap<Age, Action> = HashMap::new();
+        let mut age = 0;
+        while let Some((nook, position, age)) = self.next_nook(age) {
             let view = self.get_view(&position);
-            actions[i] = nook.act(view);
+            actions.insert(age, nook.act(view));
         }
-        for (i, node) in self.nooks.iter_mut().enumerate() {
-            node.1 = actions[i];
-        }
-        self.apply_actions();
+        self.apply_actions(actions);
     }
 
-    fn add_nook(&mut self, position: &Position, nook: Rc<Nook>) {
+    fn next_nook(&self, younger_than: Age) -> Option<(Nook, Position, Age)> {
+        // TODO: come up with a more efficient way to iterate through all of the
+        // nooks in order of age (e.g., consider implementing a binary tree representation)
+        self.map
+            .iter()
+            .filter_map(|(position, thing)| match thing {
+                Thing::Food => None,
+                Thing::Nook(nook, age) if *age >= younger_than => None,
+                Thing::Nook(nook, age) => Some((*nook, *position, *age)),
+            })
+            .min_by(|(_, _, lhs), (_, _, rhs)| lhs.cmp(rhs))
+    }
+
+    fn add_nook(&mut self, position: &Position, nook: Nook) {
         match self.map.get(position) {
             None => {
-                self.nooks
-                    .push_back((position.clone(), Action::Rest, Rc::clone(&nook)));
                 self.map
-                    .insert(position.clone(), Thing::Nook(Rc::clone(&nook)));
+                    .insert(position.clone(), Thing::Nook(nook, self.nook_counter));
+                self.nook_counter += 1;
             }
             _ => panic!("Thing already at {}", position),
         }
@@ -173,22 +175,12 @@ impl World {
 
     /// Remove nook at specified location from the world, panicing if there
     /// isn't a nook there.  Removes references in `self.map` and `self.nooks`.
-    fn remove_nook(&mut self, position: &Position) {
+    fn remove_nook(&mut self, position: &Position) -> (Nook, u128) {
         match self.map.remove(position) {
-            Some(Thing::Nook(nook)) => self.remove_nook_from_list(nook),
+            Some(Thing::Nook(nook, age)) => (nook, age),
             Some(Thing::Food) => panic!("Expected nook at {}, found food", position),
             None => panic!("Expected nook at {}, found nothing", position),
         }
-    }
-
-    fn remove_nook_from_list(&mut self, nook: Rc<Nook>) {
-        let mut cursor = self.nooks.cursor();
-        while match cursor.next() {
-            None => panic!("Nook from world.map not found in world.nooks"),
-            Some((_, _, other)) if Rc::ptr_eq(&nook, other) => false,
-            _ => true,
-        } {}
-        cursor.remove_prev().unwrap();
     }
 
     fn get_view(&self, center: &Position) -> View {
@@ -209,7 +201,7 @@ impl World {
     fn get_weight(&self, p: &Position) -> u8 {
         match self.map.get(p) {
             None => 0,
-            Some(Thing::Nook(nook)) => nook.weight,
+            Some(Thing::Nook(nook, _)) => nook.weight,
             Some(Thing::Food) => 1,
         }
     }
@@ -217,16 +209,16 @@ impl World {
     fn total_weight(&self) -> u128 {
         self.map.values().fold(0, |sum, thing| {
             sum + match thing {
-                Thing::Nook(nook) => nook.weight.into(),
+                Thing::Nook(nook, _) => nook.weight.into(),
                 Thing::Food => 1,
             }
         })
     }
 
-    fn num_nooks(&self) -> u128 {
+    fn num_nooks(&self) -> usize {
         self.map.values().fold(0, |sum, thing| {
             sum + match thing {
-                Thing::Nook(_) => 1,
+                Thing::Nook(_, _) => 1,
                 Thing::Food => 0,
             }
         })
@@ -235,11 +227,11 @@ impl World {
     fn move_to(&self, start: &Position, direction: &Direction) -> Position {
         match direction {
             Direction::Down => Position {
-                y: (start.y - 1).modulo(self.ny),
+                y: (start.y + 1).modulo(self.ny),
                 x: start.x,
             },
             Direction::Up => Position {
-                y: (start.y + 1).modulo(self.ny),
+                y: (start.y - 1).modulo(self.ny),
                 x: start.x,
             },
             Direction::Left => Position {
@@ -253,32 +245,31 @@ impl World {
         }
     }
 
-    fn apply_actions(&mut self) {
-        let mut cursor = self.nooks.cursor();
-        while let Some((position, action, nook)) = cursor.next() {
-            match action {
-                Rest => (),
-                Action::Move(direction) => {
-                    let new_position = self.move_to(position, direction);
+    fn apply_actions(&mut self, actions: HashMap<Age, Action>) {
+        let age = 0;
+        while let Some((nook, position, age)) = self.next_nook(age) {
+            match actions.get(&age) {
+                None => (), // newly added nook
+                Some(Rest) => (),
+                Some(Action::Move(direction)) => {
+                    let new_position = self.move_to(&position, direction);
                     match self.map.get(&new_position) {
                         None => {
-                            self.map.remove(position);
-                            // move
+                            self.map.remove(&position);
+                            // TODO: add back nook in correct spot
+                            // TODO: add a unit test for nooks moving
                         }
                         Some(Thing::Food) => {}
-                        Some(Thing::Nook(other)) => {}
+                        Some(Thing::Nook(other, _)) => {}
                     }
-                    // TODO: handle
-                    //   see what's on the square
-                    //   if there's something there, skip turn (TODO: implement pushing)
-                    //   if there's nothing there, move the nook
+                    // TODO: handle pushing objects
                 }
-                Action::Split(direction) => {
+                Some(Action::Split(direction)) => {
                     // TODO: handle
                     //   see what's on the square
                     //   if there's nothing there, create a new Nook with 1/2 the weight rounding down
                 }
-                Action::Eat(direction) => {
+                Some(Action::Eat(direction)) => {
                     // TODO: handle
                     //   see what's on the square
                     //   if it's food, increase weight
@@ -298,7 +289,7 @@ impl World {
                 match thing {
                     None => print!(" "),
                     Some(Thing::Food) => print!("."),
-                    Some(Thing::Nook(nook)) => print!("{}", cmp::min(nook.weight, 9)),
+                    Some(Thing::Nook(nook, _)) => print!("{}", cmp::min(nook.weight, 9)),
                 }
             }
             println!("");
@@ -312,7 +303,7 @@ fn single_nook_world(ny: isize, nx: isize) -> World {
         for x in 0..nx {
             let position = Position { y, x };
             if x == (nx - 1) / 2 && y == (ny - 1) / 2 {
-                let nook = Rc::new(Nook { weight: 1 });
+                let nook = Nook { weight: 1 };
                 world.add_nook(&position, nook);
             } else {
                 world.add_food(&position);
@@ -332,7 +323,7 @@ where
             let position = Position { y, x };
             match func(position) {
                 Thing::Food => world.add_food(&position),
-                Thing::Nook(nook) => world.add_nook(&position, nook),
+                Thing::Nook(nook, _) => world.add_nook(&position, nook),
             }
         }
     }
@@ -341,8 +332,13 @@ where
 
 fn blank_world(ny: isize, nx: isize) -> World {
     let mut map = HashMap::new();
-    let mut nooks = LinkedList::new();
-    let mut world = World { ny, nx, map, nooks };
+    let nook_counter = 1;
+    let mut world = World {
+        ny,
+        nx,
+        nook_counter,
+        map,
+    };
     world
 }
 
@@ -351,9 +347,10 @@ fn test_single_nook_world() {
     let world = single_nook_world(5, 5);
     assert_eq!(world.total_weight(), 25);
     assert_eq!(world.num_nooks(), 1);
-    let nook = Rc::new(Nook { weight: 1 });
+    let nook = Nook { weight: 1 };
     let position = Position { y: 2, x: 2 };
-    assert_eq!(world.map.get(&position), Some(&Thing::Nook(nook)));
+    let age = 1;
+    assert_eq!(world.map.get(&position), Some(&Thing::Nook(nook, age)));
 }
 
 #[test]
@@ -368,10 +365,10 @@ fn test_total_weight() {
 #[test]
 fn test_get_view() {
     let mut world = world_from_func(10, 10, |p| {
-        let nook = Rc::new(Nook {
+        let nook = Nook {
             weight: p.x.try_into().unwrap_or(0),
-        });
-        Thing::Nook(nook)
+        };
+        Thing::Nook(nook, 1)
     });
     assert_eq!(
         world.get_view(&Position { y: 2, x: 2 }),
@@ -398,12 +395,19 @@ fn test_get_view() {
 #[test]
 fn test_add_and_remove_nooks() {
     let mut world = blank_world(3, 3);
-    let nook = Rc::new(Nook { weight: 1 });
-    assert_eq!(world.nooks.len(), 0);
+    let nook = Nook { weight: 1 };
+    assert_eq!(world.num_nooks(), 0);
     world.add_nook(&Position { y: 0, x: 0 }, nook);
-    assert_eq!(world.nooks.len(), 1);
+    assert_eq!(world.num_nooks(), 1);
     world.remove_nook(&Position { y: 0, x: 0 });
-    assert_eq!(world.nooks.len(), 0);
+    assert_eq!(world.num_nooks(), 0);
+}
+
+fn test_add_and_remove_nooks() {
+    let mut world = blank_world(3, 3);
+    let nook = Nook { weight: 1 };
+    world.add_nook(&Position { y: 0, x: 0 }, nook);
+    assert_eq!(world.num_nooks(), 0);
 }
 
 #[test]
