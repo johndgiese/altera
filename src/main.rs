@@ -67,6 +67,16 @@ type Weight = u8;
 
 type Age = u128;
 
+#[derive(Debug, Copy, Clone, PartialEq)]
+enum Direction {
+    Up,
+    Left,
+    Down,
+    Right,
+}
+
+use Direction::{Down, Left, Right, Up};
+
 // TODO: use Trait Objects to allow Nooks with different implementations all to run at the same time
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct Nook {
@@ -99,14 +109,6 @@ impl Nook {
 enum Thing {
     Nook(Nook, Age),
     Food,
-}
-
-#[derive(Debug, Copy, Clone, PartialEq)]
-enum Direction {
-    Up,
-    Left,
-    Down,
-    Right,
 }
 
 #[derive(Debug, Copy, Clone, PartialEq)]
@@ -293,19 +295,19 @@ impl World {
 
     fn move_to(&self, start: &Position, direction: &Direction) -> Position {
         match direction {
-            Direction::Down => Position {
+            Down => Position {
                 y: (start.y + 1).modulo(self.ny),
                 x: start.x,
             },
-            Direction::Up => Position {
+            Up => Position {
                 y: (start.y - 1).modulo(self.ny),
                 x: start.x,
             },
-            Direction::Left => Position {
+            Left => Position {
                 y: start.y,
                 x: (start.x - 1).modulo(self.nx),
             },
-            Direction::Right => Position {
+            Right => Position {
                 y: start.y,
                 x: (start.x + 1).modulo(self.nx),
             },
@@ -462,19 +464,19 @@ fn test_move_to() {
     let nx = 3;
     let world = blank_world(ny, nx);
     assert_eq!(
-        world.move_to(&Position { y: 0, x: 0 }, &Direction::Up),
+        world.move_to(&Position { y: 0, x: 0 }, &Up),
         Position { y: ny - 1, x: 0 }
     );
     assert_eq!(
-        world.move_to(&Position { y: 0, x: 0 }, &Direction::Down),
+        world.move_to(&Position { y: 0, x: 0 }, &Down),
         Position { y: 1, x: 0 }
     );
     assert_eq!(
-        world.move_to(&Position { y: 0, x: 0 }, &Direction::Left),
+        world.move_to(&Position { y: 0, x: 0 }, &Left),
         Position { y: 0, x: nx - 1 }
     );
     assert_eq!(
-        world.move_to(&Position { y: 0, x: 0 }, &Direction::Right),
+        world.move_to(&Position { y: 0, x: 0 }, &Right),
         Position { y: 0, x: 1 }
     );
     assert_eq!(
@@ -483,7 +485,7 @@ fn test_move_to() {
                 y: ny - 1,
                 x: nx - 1
             },
-            &Direction::Up
+            &Up
         ),
         Position {
             y: ny - 2,
@@ -496,7 +498,7 @@ fn test_move_to() {
                 y: ny - 1,
                 x: nx - 1
             },
-            &Direction::Down
+            &Down
         ),
         Position { y: 0, x: nx - 1 }
     );
@@ -506,7 +508,7 @@ fn test_move_to() {
                 y: ny - 1,
                 x: nx - 1
             },
-            &Direction::Left
+            &Left
         ),
         Position {
             y: ny - 1,
@@ -519,7 +521,7 @@ fn test_move_to() {
                 y: ny - 1,
                 x: nx - 1
             },
-            &Direction::Right
+            &Right
         ),
         Position { y: ny - 1, x: 0 }
     );
@@ -532,7 +534,7 @@ fn test_nook_move() {
     let mut world = blank_world(ny, nx);
     let nook = Nook { weight: 1 };
     world.add_nook(&Position { y: 0, x: 0 }, nook);
-    world.nook_move(&Position { y: 0, x: 0 }, &Direction::Down);
+    world.nook_move(&Position { y: 0, x: 0 }, &Down);
     assert_eq!(world.map.get(&Position { x: 0, y: 0 }), None);
     assert_eq!(
         world.map.get(&Position { x: 0, y: 1 }),
@@ -545,7 +547,7 @@ fn test_nook_eat_food() {
     let mut world = blank_world(3, 3);
     world.add_nook(&Position { y: 1, x: 1 }, Nook { weight: 1 });
     world.add_food(&Position { y: 1, x: 2 });
-    world.nook_eat(&Position { y: 1, x: 1 }, &Direction::Right);
+    world.nook_eat(&Position { y: 1, x: 1 }, &Right);
     assert_eq!(world.get_weight(&Position { y: 1, x: 1 }), 2);
 }
 
@@ -554,7 +556,7 @@ fn test_nook_eat_nook() {
     let mut world = blank_world(3, 3);
     world.add_nook(&Position { y: 1, x: 1 }, Nook { weight: 1 });
     world.add_nook(&Position { y: 1, x: 2 }, Nook { weight: 1 });
-    world.nook_eat(&Position { y: 1, x: 1 }, &Direction::Right);
+    world.nook_eat(&Position { y: 1, x: 1 }, &Right);
     assert_eq!(world.get_weight(&Position { y: 1, x: 1 }), 2);
     assert_eq!(world.get_weight(&Position { y: 1, x: 2 }), 0);
 }
@@ -564,7 +566,7 @@ fn test_nook_eat_heavy_nook() {
     let mut world = blank_world(3, 3);
     world.add_nook(&Position { y: 1, x: 1 }, Nook { weight: 1 });
     world.add_nook(&Position { y: 1, x: 2 }, Nook { weight: 2 });
-    world.nook_eat(&Position { y: 1, x: 1 }, &Direction::Right);
+    world.nook_eat(&Position { y: 1, x: 1 }, &Right);
     assert_eq!(world.get_weight(&Position { y: 1, x: 1 }), 1);
     assert_eq!(world.get_weight(&Position { y: 1, x: 2 }), 2);
 }
@@ -573,7 +575,7 @@ fn test_nook_eat_heavy_nook() {
 fn test_nook_eat_empty() {
     let mut world = blank_world(3, 3);
     world.add_nook(&Position { y: 1, x: 1 }, Nook { weight: 1 });
-    world.nook_eat(&Position { y: 1, x: 1 }, &Direction::Right);
+    world.nook_eat(&Position { y: 1, x: 1 }, &Right);
     assert_eq!(world.get_weight(&Position { y: 1, x: 1 }), 1);
 }
 
@@ -582,7 +584,7 @@ fn test_nook_eat_overflow_food() {
     let mut world = blank_world(3, 3);
     world.add_nook(&Position { y: 1, x: 1 }, Nook { weight: 255 });
     world.add_food(&Position { y: 1, x: 2 });
-    world.nook_eat(&Position { y: 1, x: 1 }, &Direction::Right);
+    world.nook_eat(&Position { y: 1, x: 1 }, &Right);
     assert_eq!(world.get_weight(&Position { y: 1, x: 1 }), 255);
     assert_eq!(world.food_to_distribute, 1);
 }
