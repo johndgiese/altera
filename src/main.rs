@@ -47,6 +47,9 @@ use std::cmp;
 use std::collections::HashMap;
 use std::fmt;
 
+use rand_chacha::ChaChaRng;
+use rand_core::SeedableRng;
+
 fn main() {
     // TODO: if file provided, load the world from it, else create world of specified size
     // TODO: add random seed
@@ -126,6 +129,7 @@ struct World {
     nook_counter: Age,
     food_to_distribute: u128,
     map: HashMap<Position, Thing>,
+    rng: ChaChaRng,
 }
 
 impl World {
@@ -381,12 +385,15 @@ fn blank_world(ny: isize, nx: isize) -> World {
     let mut map = HashMap::new();
     let nook_counter = 1;
     let food_to_distribute = 0;
+    let seed: [u8; 32] = [0; 32];
+    let rng = ChaChaRng::from_seed(seed);
     let mut world = World {
         ny,
         nx,
         nook_counter,
         food_to_distribute,
         map,
+        rng,
     };
     world
 }
