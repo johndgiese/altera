@@ -50,19 +50,6 @@ use std::fmt;
 use rand_chacha::ChaChaRng;
 use rand_core::SeedableRng;
 
-fn main() {
-    // TODO: if file provided, load the world from it, else create world of specified size
-    // TODO: add random seed
-    let mut world = single_nook_world(5, 5);
-    let num_steps = 10;
-    for i in 1..num_steps {
-        println!("Step {}", i);
-        world.print();
-        world.step();
-    }
-    // TODO: save the final file to the specified location
-}
-
 type Weight = u8;
 
 type Age = u128;
@@ -86,15 +73,16 @@ struct Nook {
 
 type View = [[Weight; 5]; 5];
 
+/// A [Position] uniquely denotes a square on the world grid. The origin, (0,
+/// 0), begins at the top-left of the array. The first coordinate indicates the
+/// row (sometimes referred to as the y-axis) and the second the column (the
+/// x-axis).
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
-struct Position {
-    y: isize,
-    x: isize,
-}
+struct Position(isize, isize);
 
 impl fmt::Display for Position {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "({}, {})", self.y, self.x)
+        write!(f, "({}, {})", self.0, self.1)
     }
 }
 
@@ -254,13 +242,13 @@ impl World {
 
     fn get_view(&self, center: &Position) -> View {
         let mut view: View = [[0u8; 5]; 5];
-        let yc = center.y;
-        let xc = center.x;
+        let yc = center.0;
+        let xc = center.1;
         for (iy, y) in (-2..=2).enumerate() {
             for (ix, x) in (-2..=2).enumerate() {
                 let yp = (yc + y).modulo(self.ny);
                 let xp = (xc + x).modulo(self.nx);
-                let center_modulo = Position { y: yp, x: xp };
+                let center_modulo = Position(yp, xp);
                 view[iy][ix] = self.get_weight(&center_modulo);
             }
         }
@@ -295,22 +283,10 @@ impl World {
 
     fn move_to(&self, start: &Position, direction: &Direction) -> Position {
         match direction {
-            Down => Position {
-                y: (start.y + 1).modulo(self.ny),
-                x: start.x,
-            },
-            Up => Position {
-                y: (start.y - 1).modulo(self.ny),
-                x: start.x,
-            },
-            Left => Position {
-                y: start.y,
-                x: (start.x - 1).modulo(self.nx),
-            },
-            Right => Position {
-                y: start.y,
-                x: (start.x + 1).modulo(self.nx),
-            },
+            Down => Position((start.0 + 1).modulo(self.ny), start.1),
+            Up => Position((start.0 - 1).modulo(self.ny), start.1),
+            Left => Position(start.0, (start.1 - 1).modulo(self.nx)),
+            Right => Position(start.0, (start.1 + 1).modulo(self.nx)),
         }
     }
 
@@ -340,7 +316,7 @@ impl World {
     fn print(&self) {
         for y in 0..self.ny {
             for x in 0..self.nx {
-                let position = Position { y, x };
+                let position = Position(y, x);
                 let thing = self.map.get(&position);
                 match thing {
                     None => print!(" "),
@@ -353,11 +329,24 @@ impl World {
     }
 }
 
+fn main() {
+    // TODO: if file provided, load the world from it, else create world of specified size
+    // TODO: add random seed
+    let mut world = single_nook_world(5, 5);
+    let num_steps = 10;
+    for i in 1..num_steps {
+        println!("Step {}", i);
+        world.print();
+        world.step();
+    }
+    // TODO: save the final file to the specified location
+}
+
 fn single_nook_world(ny: isize, nx: isize) -> World {
     let mut world = blank_world(ny, nx);
     for y in 0..ny {
         for x in 0..nx {
-            let position = Position { y, x };
+            let position = Position(y, x);
             if x == (nx - 1) / 2 && y == (ny - 1) / 2 {
                 let nook = Nook { weight: 1 };
                 world.add_nook(&position, nook);
@@ -376,7 +365,7 @@ where
     let mut world = blank_world(ny, nx);
     for y in 0..ny {
         for x in 0..nx {
-            let position = Position { y, x };
+            let position = Position(y, x);
             world.add_nook(&position, func(position));
         }
     }
@@ -406,7 +395,7 @@ fn test_single_nook_world() {
     assert_eq!(world.total_weight(), 25);
     assert_eq!(world.num_nooks(), 1);
     let nook = Nook { weight: 1 };
-    let position = Position { y: 2, x: 2 };
+    let position = Position(2, 2);
     let age = 1;
     assert_eq!(world.map.get(&position), Some(&Thing::Nook(nook, age)));
 }
@@ -423,10 +412,10 @@ fn test_total_weight() {
 #[test]
 fn test_get_view() {
     let world = world_from_func(10, 10, |p| Nook {
-        weight: p.x.try_into().unwrap_or(0),
+        weight: p.1.try_into().unwrap_or(0),
     });
     assert_eq!(
-        world.get_view(&Position { y: 2, x: 2 }),
+        world.get_view(&Position(2, 2)),
         [
             [0, 1, 2, 3, 4],
             [0, 1, 2, 3, 4],
@@ -436,7 +425,7 @@ fn test_get_view() {
         ]
     );
     assert_eq!(
-        world.get_view(&Position { y: 2, x: 0 }),
+        world.get_view(&Position(2, 0)),
         [
             [8, 9, 0, 1, 2],
             [8, 9, 0, 1, 2],
@@ -452,9 +441,9 @@ fn test_add_and_remove_nooks() {
     let mut world = blank_world(3, 3);
     let nook = Nook { weight: 1 };
     assert_eq!(world.num_nooks(), 0);
-    world.add_nook(&Position { y: 0, x: 0 }, nook);
+    world.add_nook(&Position(0, 0), nook);
     assert_eq!(world.num_nooks(), 1);
-    world.remove_nook(&Position { y: 0, x: 0 });
+    world.remove_nook(&Position(0, 0));
     assert_eq!(world.num_nooks(), 0);
 }
 
@@ -463,67 +452,25 @@ fn test_move_to() {
     let ny = 4;
     let nx = 3;
     let world = blank_world(ny, nx);
+    assert_eq!(world.move_to(&Position(0, 0), &Up), Position(ny - 1, 0));
+    assert_eq!(world.move_to(&Position(0, 0), &Down), Position(1, 0));
+    assert_eq!(world.move_to(&Position(0, 0), &Left), Position(0, nx - 1));
+    assert_eq!(world.move_to(&Position(0, 0), &Right), Position(0, 1));
     assert_eq!(
-        world.move_to(&Position { y: 0, x: 0 }, &Up),
-        Position { y: ny - 1, x: 0 }
+        world.move_to(&Position(ny - 1, nx - 1), &Up),
+        Position(ny - 2, nx - 1)
     );
     assert_eq!(
-        world.move_to(&Position { y: 0, x: 0 }, &Down),
-        Position { y: 1, x: 0 }
+        world.move_to(&Position(ny - 1, nx - 1), &Down),
+        Position(0, nx - 1)
     );
     assert_eq!(
-        world.move_to(&Position { y: 0, x: 0 }, &Left),
-        Position { y: 0, x: nx - 1 }
+        world.move_to(&Position(ny - 1, nx - 1), &Left),
+        Position(ny - 1, nx - 2)
     );
     assert_eq!(
-        world.move_to(&Position { y: 0, x: 0 }, &Right),
-        Position { y: 0, x: 1 }
-    );
-    assert_eq!(
-        world.move_to(
-            &Position {
-                y: ny - 1,
-                x: nx - 1
-            },
-            &Up
-        ),
-        Position {
-            y: ny - 2,
-            x: nx - 1
-        }
-    );
-    assert_eq!(
-        world.move_to(
-            &Position {
-                y: ny - 1,
-                x: nx - 1
-            },
-            &Down
-        ),
-        Position { y: 0, x: nx - 1 }
-    );
-    assert_eq!(
-        world.move_to(
-            &Position {
-                y: ny - 1,
-                x: nx - 1
-            },
-            &Left
-        ),
-        Position {
-            y: ny - 1,
-            x: nx - 2
-        }
-    );
-    assert_eq!(
-        world.move_to(
-            &Position {
-                y: ny - 1,
-                x: nx - 1
-            },
-            &Right
-        ),
-        Position { y: ny - 1, x: 0 }
+        world.move_to(&Position(ny - 1, nx - 1), &Right),
+        Position(ny - 1, 0)
     );
 }
 
@@ -533,58 +480,55 @@ fn test_nook_move() {
     let nx = 3;
     let mut world = blank_world(ny, nx);
     let nook = Nook { weight: 1 };
-    world.add_nook(&Position { y: 0, x: 0 }, nook);
-    world.nook_move(&Position { y: 0, x: 0 }, &Down);
-    assert_eq!(world.map.get(&Position { x: 0, y: 0 }), None);
-    assert_eq!(
-        world.map.get(&Position { x: 0, y: 1 }),
-        Some(&Thing::Nook(nook, 1))
-    );
+    world.add_nook(&Position(0, 0), nook);
+    world.nook_move(&Position(0, 0), &Down);
+    assert_eq!(world.map.get(&Position(0, 0)), None);
+    assert_eq!(world.map.get(&Position(1, 0)), Some(&Thing::Nook(nook, 1)));
 }
 
 #[test]
 fn test_nook_eat_food() {
     let mut world = blank_world(3, 3);
-    world.add_nook(&Position { y: 1, x: 1 }, Nook { weight: 1 });
-    world.add_food(&Position { y: 1, x: 2 });
-    world.nook_eat(&Position { y: 1, x: 1 }, &Right);
-    assert_eq!(world.get_weight(&Position { y: 1, x: 1 }), 2);
+    world.add_nook(&Position(1, 1), Nook { weight: 1 });
+    world.add_food(&Position(1, 2));
+    world.nook_eat(&Position(1, 1), &Right);
+    assert_eq!(world.get_weight(&Position(1, 1)), 2);
 }
 
 #[test]
 fn test_nook_eat_nook() {
     let mut world = blank_world(3, 3);
-    world.add_nook(&Position { y: 1, x: 1 }, Nook { weight: 1 });
-    world.add_nook(&Position { y: 1, x: 2 }, Nook { weight: 1 });
-    world.nook_eat(&Position { y: 1, x: 1 }, &Right);
-    assert_eq!(world.get_weight(&Position { y: 1, x: 1 }), 2);
-    assert_eq!(world.get_weight(&Position { y: 1, x: 2 }), 0);
+    world.add_nook(&Position(1, 1), Nook { weight: 1 });
+    world.add_nook(&Position(1, 2), Nook { weight: 1 });
+    world.nook_eat(&Position(1, 1), &Right);
+    assert_eq!(world.get_weight(&Position(1, 1)), 2);
+    assert_eq!(world.get_weight(&Position(1, 2)), 0);
 }
 
 #[test]
 fn test_nook_eat_heavy_nook() {
     let mut world = blank_world(3, 3);
-    world.add_nook(&Position { y: 1, x: 1 }, Nook { weight: 1 });
-    world.add_nook(&Position { y: 1, x: 2 }, Nook { weight: 2 });
-    world.nook_eat(&Position { y: 1, x: 1 }, &Right);
-    assert_eq!(world.get_weight(&Position { y: 1, x: 1 }), 1);
-    assert_eq!(world.get_weight(&Position { y: 1, x: 2 }), 2);
+    world.add_nook(&Position(1, 1), Nook { weight: 1 });
+    world.add_nook(&Position(1, 2), Nook { weight: 2 });
+    world.nook_eat(&Position(1, 1), &Right);
+    assert_eq!(world.get_weight(&Position(1, 1)), 1);
+    assert_eq!(world.get_weight(&Position(1, 2)), 2);
 }
 
 #[test]
 fn test_nook_eat_empty() {
     let mut world = blank_world(3, 3);
-    world.add_nook(&Position { y: 1, x: 1 }, Nook { weight: 1 });
-    world.nook_eat(&Position { y: 1, x: 1 }, &Right);
-    assert_eq!(world.get_weight(&Position { y: 1, x: 1 }), 1);
+    world.add_nook(&Position(1, 1), Nook { weight: 1 });
+    world.nook_eat(&Position(1, 1), &Right);
+    assert_eq!(world.get_weight(&Position(1, 1)), 1);
 }
 
 #[test]
 fn test_nook_eat_overflow_food() {
     let mut world = blank_world(3, 3);
-    world.add_nook(&Position { y: 1, x: 1 }, Nook { weight: 255 });
-    world.add_food(&Position { y: 1, x: 2 });
-    world.nook_eat(&Position { y: 1, x: 1 }, &Right);
-    assert_eq!(world.get_weight(&Position { y: 1, x: 1 }), 255);
+    world.add_nook(&Position(1, 1), Nook { weight: 255 });
+    world.add_food(&Position(1, 2));
+    world.nook_eat(&Position(1, 1), &Right);
+    assert_eq!(world.get_weight(&Position(1, 1)), 255);
     assert_eq!(world.food_to_distribute, 1);
 }
