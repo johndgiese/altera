@@ -115,6 +115,8 @@ enum Action {
 /// actions must be applied in that order.
 struct World {
     // TODO: add the random number generator's state
+    t: isize,
+    starvation_interval: isize,
     ny: isize,
     nx: isize,
     nook_counter: Age,
@@ -125,6 +127,7 @@ struct World {
 
 impl World {
     fn step(&mut self) {
+        self.t += 1;
         // Collect all Nook's actions given the current state of the world;
         // then process them. Nook actions are all calculated upfront in order
         // to allow the process to be parallelizable.
@@ -135,6 +138,10 @@ impl World {
             actions.insert(age, nook.act(view));
         }
         self.apply_actions(actions);
+        if self.t % self.starvation_interval == 0 {
+            self.starve_nooks();
+        }
+        self.distribute_food();
     }
 
     fn next_nook(&self, younger_than: Age) -> Option<(Nook, Position, Age)> {
@@ -194,7 +201,7 @@ impl World {
                 true
             }
             Some(Thing::Food) => false,
-            Some(Thing::Nook(other, _)) => false,
+            Some(Thing::Nook(_, _)) => false,
         }
     }
 
@@ -356,8 +363,6 @@ impl World {
                 }
             }
         }
-        // TODO: handle starvation
-        // TODO: add back weight that is removed from Nooks
     }
 
     fn print(&self) {
@@ -421,13 +426,17 @@ where
 
 fn blank_world(ny: isize, nx: isize) -> World {
     let mut map = HashMap::new();
+    let t = 0;
     let nook_counter = 1;
     let food_to_distribute = 0;
+    let starvation_interval = 100;
     let seed: [u8; 32] = [0; 32];
     let rng = ChaChaRng::from_seed(seed);
     let mut world = World {
+        t,
         ny,
         nx,
+        starvation_interval,
         nook_counter,
         food_to_distribute,
         map,
@@ -598,4 +607,21 @@ fn test_starve_nooks() {
     assert_eq!(world.food_to_distribute, 2);
     assert_eq!(world.get_weight(&Position(0, 0)), 0);
     assert_eq!(world.get_weight(&Position(0, 1)), 1);
+}
+
+#[test]
+fn test_starving_single_nook_after_interval() {
+    let mut world = blank_world(5, 5);
+    world.starvation_interval = 5;
+    world.add_nook(&Position(0, 0), Nook { weight: 1 });
+    world.step();
+    world.step();
+    world.step();
+    world.step();
+    assert_eq!(world.num_nooks(), 1);
+    assert_eq!(world.total_weight(), 1);
+    assert_eq!(world.t, 4);
+    world.step();
+    assert_eq!(world.num_nooks(), 0);
+    assert_eq!(world.total_weight(), 1);
 }
