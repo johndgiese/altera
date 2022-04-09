@@ -42,11 +42,11 @@
 //! account when making their decisions.
 mod modulo;
 use modulo::Mod;
+use std::rc::Rc;
 
 use std::cmp;
 use std::collections::HashMap;
 use std::fmt;
-use std::vec::Vec;
 
 fn main() {
     // TODO: if file provided, load the world from it, else create world of specified size
@@ -61,16 +61,18 @@ fn main() {
     // TODO: save the final file to the specified location
 }
 
-// TODO: use Trait Objects to allow Nooks with different implementations all to run at the same time
-#[derive(Debug, Copy, Clone, PartialEq)]
-struct Nook {
-    weight: u8,
-    // TODO: add the internal state of the Nook which is passed between time steps
-}
+type Weight = u8;
 
 type Age = u128;
 
-type View = [[u8; 5]; 5];
+// TODO: use Trait Objects to allow Nooks with different implementations all to run at the same time
+#[derive(Debug, PartialEq)]
+struct Nook {
+    weight: Weight,
+    // TODO: add the internal state of the Nook which is passed between time steps
+}
+
+type View = [[Weight; 5]; 5];
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 struct Position {
@@ -93,7 +95,7 @@ impl Nook {
 
 #[derive(Debug, Clone, PartialEq)]
 enum Thing {
-    Nook(Nook, Age),
+    Nook(Rc<Nook>, Age),
     Food,
 }
 
@@ -123,6 +125,7 @@ struct World {
     ny: isize,
     nx: isize,
     nook_counter: Age,
+    food_to_distribute: u128,
     map: HashMap<Position, Thing>,
 }
 
@@ -132,7 +135,7 @@ impl World {
         // then process them. Nook actions are all calculated upfront in order
         // to allow the process to be parallelizable.
         let mut actions: HashMap<Age, Action> = HashMap::new();
-        let mut age = 0;
+        let age = 0;
         while let Some((nook, position, age)) = self.next_nook(age) {
             let view = self.get_view(&position);
             actions.insert(age, nook.act(view));
@@ -140,15 +143,18 @@ impl World {
         self.apply_actions(actions);
     }
 
-    fn next_nook(&self, younger_than: Age) -> Option<(Nook, Position, Age)> {
+    fn next_nook(&self, younger_than: Age) -> Option<(Rc<Nook>, Position, Age)> {
         // TODO: come up with a more efficient way to iterate through all of the
         // nooks in order of age (e.g., consider implementing a binary tree representation)
         self.map
             .iter()
             .filter_map(|(position, thing)| match thing {
                 Thing::Food => None,
-                Thing::Nook(nook, age) if *age >= younger_than => None,
-                Thing::Nook(nook, age) => Some((*nook, *position, *age)),
+                Thing::Nook(_, age) if *age >= younger_than => None,
+                Thing::Nook(nook, age) => {
+                    let nook_copy = Rc::clone(nook);
+                    Some((nook_copy, *position, *age))
+                }
             })
             .min_by(|(_, _, lhs), (_, _, rhs)| lhs.cmp(rhs))
     }
@@ -156,8 +162,10 @@ impl World {
     fn add_nook(&mut self, position: &Position, nook: Nook) {
         match self.map.get(position) {
             None => {
-                self.map
-                    .insert(position.clone(), Thing::Nook(nook, self.nook_counter));
+                self.map.insert(
+                    position.clone(),
+                    Thing::Nook(Rc::new(nook), self.nook_counter),
+                );
                 self.nook_counter += 1;
             }
             _ => panic!("Thing already at {}", position),
@@ -175,11 +183,64 @@ impl World {
 
     /// Remove nook at specified location from the world, panicing if there
     /// isn't a nook there.  Removes references in `self.map` and `self.nooks`.
-    fn remove_nook(&mut self, position: &Position) -> (Nook, u128) {
+    fn remove_nook(&mut self, position: &Position) -> (Rc<Nook>, Age) {
         match self.map.remove(position) {
             Some(Thing::Nook(nook, age)) => (nook, age),
             Some(Thing::Food) => panic!("Expected nook at {}, found food", position),
             None => panic!("Expected nook at {}, found nothing", position),
+        }
+    }
+
+    fn nook_move(&mut self, position: &Position, direction: &Direction) -> bool {
+        let new_position = self.move_to(&position, &direction);
+        // TODO: handle pushing objects
+        match self.map.get(&new_position) {
+            None => {
+                let thing = self.map.remove(&position).unwrap(); // move shouldn't ever be called if a nook isn't at the squre
+                assert!(match thing {
+                    Thing::Nook(_, _) => true,
+                    _ => false,
+                });
+                self.map.insert(new_position, thing);
+                true
+            }
+            Some(Thing::Food) => false,
+            Some(Thing::Nook(other, _)) => false,
+        }
+    }
+
+    fn nook_eat(&mut self, nook: &mut Nook, position: &Position, direction: &Direction) -> bool {
+        let new_position = self.move_to(&position, &direction);
+        // TODO: handle
+        //   see what's on the square
+        //   if it's food, increase weight
+        //   if it's a nook and it weights less, eat the nook
+        match self.map.get(&new_position) {
+            None => false,
+            Some(Thing::Food) => {
+                self.map.remove(position);
+                self.fatten_nook(nook, 1);
+                true
+            }
+            // TODO: finish this
+            Some(Thing::Nook(other, _)) if other.weight <= nook.weight => {
+                self.fatten_nook(nook, other.weight);
+                self.remove_nook(&new_position);
+                true
+            }
+            Some(Thing::Nook(_, _)) => false,
+        }
+    }
+
+    fn fatten_nook(&mut self, nook: &mut Nook, gain: Weight) {
+        // TODO: figure out a way to avoid casting in this method
+        let nook_weight: u128 = nook.weight.into();
+        let gain_weight: u128 = gain.into();
+        if nook_weight + gain_weight > 255 {
+            self.food_to_distribute += nook_weight + gain_weight - 255;
+            nook.weight = 255;
+        } else {
+            nook.weight += gain;
         }
     }
 
@@ -252,17 +313,7 @@ impl World {
                 None => (), // newly added nook
                 Some(Rest) => (),
                 Some(Action::Move(direction)) => {
-                    let new_position = self.move_to(&position, direction);
-                    match self.map.get(&new_position) {
-                        None => {
-                            self.map.remove(&position);
-                            // TODO: add back nook in correct spot
-                            // TODO: add a unit test for nooks moving
-                        }
-                        Some(Thing::Food) => {}
-                        Some(Thing::Nook(other, _)) => {}
-                    }
-                    // TODO: handle pushing objects
+                    self.nook_move(&position, &direction);
                 }
                 Some(Action::Split(direction)) => {
                     // TODO: handle
@@ -270,10 +321,7 @@ impl World {
                     //   if there's nothing there, create a new Nook with 1/2 the weight rounding down
                 }
                 Some(Action::Eat(direction)) => {
-                    // TODO: handle
-                    //   see what's on the square
-                    //   if it's food, increase weight
-                    //   if it's a nook and it weights less, eat the nook
+                    self.nook_eat(&mut nook, &position, &direction);
                 }
             }
         }
@@ -315,16 +363,13 @@ fn single_nook_world(ny: isize, nx: isize) -> World {
 
 fn world_from_func<F>(ny: isize, nx: isize, func: F) -> World
 where
-    F: Fn(Position) -> Thing,
+    F: Fn(Position) -> Nook,
 {
     let mut world = blank_world(ny, nx);
     for y in 0..ny {
         for x in 0..nx {
             let position = Position { y, x };
-            match func(position) {
-                Thing::Food => world.add_food(&position),
-                Thing::Nook(nook, _) => world.add_nook(&position, nook),
-            }
+            world.add_nook(&position, func(position));
         }
     }
     world
@@ -333,10 +378,12 @@ where
 fn blank_world(ny: isize, nx: isize) -> World {
     let mut map = HashMap::new();
     let nook_counter = 1;
+    let food_to_distribute = 0;
     let mut world = World {
         ny,
         nx,
         nook_counter,
+        food_to_distribute,
         map,
     };
     world
@@ -350,7 +397,10 @@ fn test_single_nook_world() {
     let nook = Nook { weight: 1 };
     let position = Position { y: 2, x: 2 };
     let age = 1;
-    assert_eq!(world.map.get(&position), Some(&Thing::Nook(nook, age)));
+    assert_eq!(
+        world.map.get(&position),
+        Some(&Thing::Nook(Rc::new(nook), age))
+    );
 }
 
 #[test]
@@ -364,11 +414,8 @@ fn test_total_weight() {
 
 #[test]
 fn test_get_view() {
-    let mut world = world_from_func(10, 10, |p| {
-        let nook = Nook {
-            weight: p.x.try_into().unwrap_or(0),
-        };
-        Thing::Nook(nook, 1)
+    let world = world_from_func(10, 10, |p| Nook {
+        weight: p.x.try_into().unwrap_or(0),
     });
     assert_eq!(
         world.get_view(&Position { y: 2, x: 2 }),
@@ -400,13 +447,6 @@ fn test_add_and_remove_nooks() {
     world.add_nook(&Position { y: 0, x: 0 }, nook);
     assert_eq!(world.num_nooks(), 1);
     world.remove_nook(&Position { y: 0, x: 0 });
-    assert_eq!(world.num_nooks(), 0);
-}
-
-fn test_add_and_remove_nooks() {
-    let mut world = blank_world(3, 3);
-    let nook = Nook { weight: 1 };
-    world.add_nook(&Position { y: 0, x: 0 }, nook);
     assert_eq!(world.num_nooks(), 0);
 }
 
@@ -477,4 +517,19 @@ fn test_move_to() {
         ),
         Position { y: ny - 1, x: 0 }
     );
+}
+
+#[test]
+fn test_move_nook() {
+    let ny = 4;
+    let nx = 3;
+    let mut world = blank_world(ny, nx);
+    let nook = Nook { weight: 1 };
+    world.add_nook(&Position { y: 0, x: 0 }, nook);
+    world.nook_move(&Position { y: 0, x: 0 }, &Direction::Down);
+    assert_eq!(world.map.get(&Position { x: 0, y: 0 }), None);
+    //assert_eq!(
+    //    world.map.get(&Position { x: 0, y: 1 }),
+    //    Some(&Thing::Nook(Rc::new(nook), 1))
+    //);
 }
