@@ -47,6 +47,7 @@ use std::cmp;
 use std::collections::HashMap;
 use std::fmt;
 
+use rand::Rng;
 use rand_chacha::ChaChaRng;
 use rand_core::SeedableRng;
 
@@ -117,7 +118,7 @@ struct World {
     ny: isize,
     nx: isize,
     nook_counter: Age,
-    food_to_distribute: u128,
+    food_to_distribute: isize,
     map: HashMap<Position, Thing>,
     rng: ChaChaRng,
 }
@@ -229,8 +230,8 @@ impl World {
             None => panic!("Nothing at square {}", position),
             Some(Thing::Food) => panic!("Food at square {}", position),
         };
-        let nook_weight: u128 = nook.weight.into();
-        let gain_weight: u128 = gain.into();
+        let nook_weight: isize = nook.weight.into();
+        let gain_weight: isize = gain.into();
         if nook_weight + gain_weight > 255 {
             self.food_to_distribute += nook_weight + gain_weight - 255;
             nook.weight = 255;
@@ -238,6 +239,42 @@ impl World {
             nook.weight += gain;
         }
         self.map.insert(*position, Thing::Nook(nook, *age));
+    }
+
+    fn starve_nooks(&mut self) {
+        let mut positions_to_remove: Vec<Position> = vec![];
+        for (position, thing) in self.map.iter_mut() {
+            match thing {
+                Thing::Nook(nook, _) => {
+                    if nook.weight == 1 {
+                        positions_to_remove.push(position.clone());
+                    } else {
+                        nook.weight -= 1;
+                    }
+                    self.food_to_distribute += 1;
+                }
+                _ => (),
+            }
+        }
+        for position in positions_to_remove {
+            self.map.remove(&position);
+        }
+    }
+
+    fn distribute_food(&mut self) {
+        assert!(self.food_to_distribute <= self.num_empty());
+        while self.food_to_distribute > 0 {
+            let iy = self.rng.gen_range(0..self.nx);
+            let ix = self.rng.gen_range(0..self.ny);
+            let position = Position(iy, ix);
+            match self.map.get(&position) {
+                None => {
+                    self.map.insert(position, Thing::Food);
+                    self.food_to_distribute -= 1;
+                }
+                _ => (),
+            }
+        }
     }
 
     fn get_view(&self, center: &Position) -> View {
@@ -272,13 +309,23 @@ impl World {
         })
     }
 
-    fn num_nooks(&self) -> usize {
+    fn num_nooks(&self) -> isize {
         self.map.values().fold(0, |sum, thing| {
             sum + match thing {
                 Thing::Nook(_, _) => 1,
                 Thing::Food => 0,
             }
         })
+    }
+
+    fn num_empty(&self) -> isize {
+        self.nx * self.ny
+            - self.map.values().fold(0, |sum, thing| {
+                sum + match thing {
+                    Thing::Nook(_, _) => 1,
+                    Thing::Food => 1,
+                }
+            })
     }
 
     fn move_to(&self, start: &Position, direction: &Direction) -> Position {
@@ -295,7 +342,7 @@ impl World {
         while let Some((nook, position, age)) = self.next_nook(age) {
             match actions.get(&age) {
                 None => (), // newly added nook
-                Some(Rest) => (),
+                Some(Action::Rest) => (),
                 Some(Action::Move(direction)) => {
                     self.nook_move(&position, &direction);
                 }
@@ -531,4 +578,24 @@ fn test_nook_eat_overflow_food() {
     world.nook_eat(&Position(1, 1), &Right);
     assert_eq!(world.get_weight(&Position(1, 1)), 255);
     assert_eq!(world.food_to_distribute, 1);
+}
+
+#[test]
+fn test_distribute_food_blank() {
+    let mut world = blank_world(5, 5);
+    world.food_to_distribute = 25;
+    world.distribute_food();
+    assert_eq!(world.food_to_distribute, 0);
+    assert_eq!(world.total_weight(), 25);
+}
+
+#[test]
+fn test_starve_nooks() {
+    let mut world = blank_world(5, 5);
+    world.add_nook(&Position(0, 0), Nook { weight: 1 });
+    world.add_nook(&Position(0, 1), Nook { weight: 2 });
+    world.starve_nooks();
+    assert_eq!(world.food_to_distribute, 2);
+    assert_eq!(world.get_weight(&Position(0, 0)), 0);
+    assert_eq!(world.get_weight(&Position(0, 1)), 1);
 }
