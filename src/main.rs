@@ -178,7 +178,7 @@ impl World {
     }
 
     /// Remove nook at specified location from the world, panicing if there
-    /// isn't a nook there.  Removes references in `self.map` and `self.nooks`.
+    /// isn't a nook there.
     fn remove_nook(&mut self, position: &Position) -> (Nook, Age) {
         match self.map.remove(position) {
             Some(Thing::Nook(nook, age)) => (nook, age),
@@ -187,6 +187,10 @@ impl World {
         }
     }
 
+    /// Move a nook at the specified location on step in the specified
+    /// direction. Returns `true` if the move was successful (i.e., there wasn't
+    /// anything else there). Panics if there isn't a nook at the specified
+    /// location.
     fn nook_move(&mut self, position: &Position, direction: &Direction) -> bool {
         let new_position = self.move_to(&position, &direction);
         // TODO: handle pushing objects
@@ -198,6 +202,35 @@ impl World {
                     _ => false,
                 });
                 self.map.insert(new_position, thing);
+                true
+            }
+            Some(Thing::Food) => false,
+            Some(Thing::Nook(_, _)) => false,
+        }
+    }
+
+    fn nook_split(&mut self, position: &Position, direction: &Direction) -> bool {
+        let child_position = self.move_to(&position, &direction);
+        let (nook, age) = match self.map.get(&position) {
+            Some(Thing::Nook(nook, age)) => (nook, age),
+            _ => panic!("No nook at position!"),
+        };
+        if nook.weight == 1 {
+            return false;
+        }
+        match self.map.get(&child_position) {
+            None => {
+                // TODO: add some random mutation etc. to the clone process
+                let mut child = nook.clone();
+                let mut parent = nook.clone();
+                let child_weight: Weight = nook.weight / 2;
+                let parent_weight = nook.weight - child_weight;
+                assert!(child_weight > 0);
+                child.weight = child_weight;
+                parent.weight = parent_weight;
+                self.map
+                    .insert(position.clone(), Thing::Nook(parent, age.clone()));
+                self.add_nook(&child_position, child);
                 true
             }
             Some(Thing::Food) => false,
@@ -354,9 +387,7 @@ impl World {
                     self.nook_move(&position, &direction);
                 }
                 Some(Action::Split(direction)) => {
-                    // TODO: handle
-                    //   see what's on the square
-                    //   if there's nothing there, create a new Nook with 1/2 the weight rounding down
+                    self.nook_split(&position, &direction);
                 }
                 Some(Action::Eat(direction)) => {
                     self.nook_eat(&position, &direction);
@@ -587,6 +618,45 @@ fn test_nook_eat_overflow_food() {
     world.nook_eat(&Position(1, 1), &Right);
     assert_eq!(world.get_weight(&Position(1, 1)), 255);
     assert_eq!(world.food_to_distribute, 1);
+}
+
+#[test]
+fn test_nook_split_even() {
+    let mut world = blank_world(3, 3);
+    world.add_nook(&Position(0, 0), Nook { weight: 2 });
+    let result = world.nook_split(&Position(0, 0), &Left);
+    assert_eq!(result, true);
+    assert_eq!(world.get_weight(&Position(0, 0)), 1);
+    assert_eq!(world.get_weight(&Position(0, 2)), 1);
+}
+
+#[test]
+fn test_nook_split_odd() {
+    let mut world = blank_world(3, 3);
+    world.add_nook(&Position(0, 0), Nook { weight: 3 });
+    let result = world.nook_split(&Position(0, 0), &Left);
+    assert_eq!(result, true);
+    assert_eq!(world.get_weight(&Position(0, 0)), 2);
+    assert_eq!(world.get_weight(&Position(0, 2)), 1);
+}
+
+#[test]
+fn test_nook_split_one() {
+    let mut world = blank_world(3, 3);
+    world.add_nook(&Position(0, 0), Nook { weight: 1 });
+    let result = world.nook_split(&Position(0, 0), &Left);
+    assert_eq!(result, false);
+    assert_eq!(world.get_weight(&Position(0, 0)), 1);
+}
+
+#[test]
+fn test_nook_split_filled_square() {
+    let mut world = blank_world(3, 3);
+    world.add_nook(&Position(0, 0), Nook { weight: 2 });
+    world.add_food(&Position(0, 2));
+    let result = world.nook_split(&Position(0, 0), &Left);
+    assert_eq!(result, false);
+    assert_eq!(world.get_weight(&Position(0, 0)), 2);
 }
 
 #[test]
