@@ -51,7 +51,7 @@ use rand::Rng;
 use rand_chacha::ChaChaRng;
 use rand_core::SeedableRng;
 use serde::{Deserialize, Serialize};
-use serde_json;
+use serde_yaml;
 
 type Weight = u8;
 
@@ -707,8 +707,8 @@ fn test_serialize_deserialize_world() {
     world.add_nook(&Position(0, 0), Nook { weight: 1 });
     world.add_nook(&Position(0, 1), Nook { weight: 2 });
     world.add_food(&Position(0, 2));
-    let serialized = serde_json::to_string(&world).unwrap();
-    let deserialized: World = serde_json::from_str(&serialized).unwrap();
+    let serialized = serde_yaml::to_string(&world).unwrap();
+    let deserialized: World = serde_yaml::from_str(&serialized).unwrap();
     assert_eq!(deserialized.get_weight(&Position(0, 0)), 1);
     assert_eq!(deserialized.get_weight(&Position(0, 1)), 2);
     assert_eq!(deserialized.get_weight(&Position(0, 2)), 1);
