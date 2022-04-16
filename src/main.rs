@@ -50,12 +50,14 @@ use std::fmt;
 use rand::Rng;
 use rand_chacha::ChaChaRng;
 use rand_core::SeedableRng;
+use serde::{Deserialize, Serialize};
+use serde_json;
 
 type Weight = u8;
 
 type Age = u128;
 
-#[derive(Debug, Copy, Clone, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, Copy, Clone, PartialEq)]
 enum Direction {
     Up,
     Left,
@@ -66,7 +68,7 @@ enum Direction {
 use Direction::{Down, Left, Right, Up};
 
 // TODO: use Trait Objects to allow Nooks with different implementations all to run at the same time
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq)]
 struct Nook {
     weight: Weight,
     // TODO: add the internal state of the Nook which is passed between time steps
@@ -78,7 +80,7 @@ type View = [[Weight; 5]; 5];
 /// 0), begins at the top-left of the array. The first coordinate indicates the
 /// row (sometimes referred to as the y-axis) and the second the column (the
 /// x-axis).
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Serialize, Deserialize, Copy, Clone, PartialEq, Eq, Hash)]
 struct Position(isize, isize);
 
 impl fmt::Display for Position {
@@ -94,13 +96,13 @@ impl Nook {
     }
 }
 
-#[derive(Debug, Copy, Clone, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, Copy, Clone, PartialEq)]
 enum Thing {
     Nook(Nook, Age),
     Food,
 }
 
-#[derive(Debug, Copy, Clone, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, Copy, Clone, PartialEq)]
 enum Action {
     Move(Direction),
     Eat(Direction),
@@ -113,6 +115,7 @@ enum Action {
 /// them. It also stores the relative age of each nook that's been added to the
 /// world. The order that the nooks were added in is important since the nook's
 /// actions must be applied in that order.
+#[derive(Serialize, Deserialize)]
 struct World {
     // TODO: add the random number generator's state
     t: isize,
@@ -126,11 +129,11 @@ struct World {
 }
 
 impl World {
+    /// Step the world's state forward by one increment.  First, collect all
+    /// Nook's actions given the current state of the world.  Then process them.
+    /// Nook actions are all calculated upfront to enable parallellization.
     fn step(&mut self) {
         self.t += 1;
-        // Collect all Nook's actions given the current state of the world;
-        // then process them. Nook actions are all calculated upfront in order
-        // to allow the process to be parallelizable.
         let mut actions: HashMap<Age, Action> = HashMap::new();
         let age = 0;
         while let Some((nook, position, age)) = self.next_nook(age) {
@@ -144,6 +147,8 @@ impl World {
         self.distribute_food();
     }
 
+    /// Find the next nook that is younger than the specified age; this is used
+    /// to iterate through the list of nooks from oldest to youngest.
     fn next_nook(&self, younger_than: Age) -> Option<(Nook, Position, Age)> {
         // TODO: come up with a more efficient way to iterate through all of the
         // nooks in order of age (e.g., consider implementing a binary tree representation)
@@ -694,4 +699,17 @@ fn test_starving_single_nook_after_interval() {
     world.step();
     assert_eq!(world.num_nooks(), 0);
     assert_eq!(world.total_weight(), 1);
+}
+
+#[test]
+fn test_serialize_deserialize_world() {
+    let mut world = blank_world(3, 3);
+    world.add_nook(&Position(0, 0), Nook { weight: 1 });
+    world.add_nook(&Position(0, 1), Nook { weight: 2 });
+    world.add_food(&Position(0, 2));
+    let serialized = serde_json::to_string(&world).unwrap();
+    let deserialized: World = serde_json::from_str(&serialized).unwrap();
+    assert_eq!(deserialized.get_weight(&Position(0, 0)), 1);
+    assert_eq!(deserialized.get_weight(&Position(0, 1)), 2);
+    assert_eq!(deserialized.get_weight(&Position(0, 2)), 1);
 }
